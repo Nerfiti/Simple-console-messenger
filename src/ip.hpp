@@ -40,6 +40,4 @@ class IP_handler
         void break_tcp_connection();
         int listen_as_server();
         int listen_as_client();
-
-        int mtu_ = 1500;
 };
