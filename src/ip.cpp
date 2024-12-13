@@ -14,7 +14,9 @@ IP_handler::IP_handler(int socket_type, int port, processor proc, bool server):
     socket_(-1),
     server_(server),
     process_msg_(proc),
-    active_client_(!server)
+    active_client_(!server),
+    ctx_(nullptr),
+    ssl_(nullptr)
 {
     memset(&server_address_, 0, sizeof(server_address_));
     server_address_.sin_addr.s_addr = INADDR_ANY;
@@ -26,6 +28,11 @@ IP_handler::IP_handler(int socket_type, int port, processor proc, bool server):
 
     client_length_ = sizeof(client_address_);
     server_length_ = sizeof(server_address_);
+
+    init_openssl();
+    ctx_ = create_context();
+    configure_context(ctx_);
+
     connect();
 }
 
@@ -66,6 +73,11 @@ int IP_handler::connect()
             return -1;
         }
     }
+    else
+    {
+        connect_tls();
+    }
+
     return 0;
 }
 
@@ -137,7 +149,7 @@ const char *IP_handler::send(const char *message, size_t length)
             }
         }
 
-        int code = ::send(client_socket_, message_to_send.c_str(), message_to_send.length(), 0);
+        int code = SSL_write(ssl_, message_to_send.c_str(), message_to_send.length());
         if (code < 0)
             return "Error sending packets.";
 
@@ -175,6 +187,7 @@ int IP_handler::listen_as_server()
         if (socket_type_ == SOCK_STREAM)
         {
             accept_tcp_connection();
+            // accept_tls_connection();
             return 0;
         }
         else
@@ -186,7 +199,7 @@ int IP_handler::listen_as_server()
     int length = -1;
     if (socket_type_ == SOCK_STREAM)
     {
-        length = recv(client_socket_, buf, Buff_size, 0);
+        length = SSL_read(ssl_, buf, Buff_size);
         if (length <= 0)
             break_tcp_connection();
     }
@@ -223,10 +236,98 @@ int IP_handler::listen_as_client()
     if (socket_ == -1)
         return -1;
 
-    int length = recvfrom(socket_, buf, Buff_size, 0, NULL, NULL);
+    int length = SSL_read(ssl_, buf, Buff_size);
     if (length <= 0)
         break_tcp_connection();
 
     return length;
-
 }
+
+void IP_handler::init_openssl()
+{
+    SSL_load_error_strings();
+    OpenSSL_add_ssl_algorithms();
+}
+
+SSL_CTX* IP_handler::create_context()
+{
+    const SSL_METHOD *method;
+    SSL_CTX *ctx;
+
+    method = server_ ? TLS_server_method() : TLS_client_method();
+
+    ctx = SSL_CTX_new(method);
+    if (!ctx) {
+        perror("Unable to create SSL context");
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
+
+    return ctx;
+}
+
+void IP_handler::configure_context(SSL_CTX *ctx, const char *path_to_cert, const char *path_to_key)
+{
+    SSL_CTX_set_ecdh_auto(ctx, 1);
+
+    if (server_) {
+        if (SSL_CTX_use_certificate_file(ctx, path_to_cert, SSL_FILETYPE_PEM) <= 0) {
+            ERR_print_errors_fp(stderr);
+            exit(EXIT_FAILURE);
+        }
+
+        if (SSL_CTX_use_PrivateKey_file(ctx, path_to_key, SSL_FILETYPE_PEM) <= 0) {
+            ERR_print_errors_fp(stderr);
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
+void IP_handler::accept_tls_connection()
+{
+    ssl_ = SSL_new(ctx_);
+    SSL_set_fd(ssl_, client_socket_);
+    if (SSL_accept(ssl_) <= 0) {
+        ERR_print_errors_fp(stderr);
+    }
+}
+
+void IP_handler::connect_tls()
+{
+    ssl_ = SSL_new(ctx_);
+    if (ssl_ == nullptr) {
+        ERR_print_errors_fp(stderr);
+        return;
+    }
+
+    SSL_set_fd(ssl_, socket_);
+    int ret = SSL_connect(ssl_);
+    if (ret <= 0) {
+        int err = SSL_get_error(ssl_, ret);
+        switch (err) {
+            case SSL_ERROR_ZERO_RETURN:
+                std::cerr << "SSL_connect: peer has closed the connection" << std::endl;
+                break;
+            case SSL_ERROR_WANT_READ:
+                std::cerr << "SSL_connect: need more data from the peer" << std::endl;
+                break;
+            case SSL_ERROR_WANT_WRITE:
+                std::cerr << "SSL_connect: need to write more data to the peer" << std::endl;
+                break;
+            case SSL_ERROR_WANT_X509_LOOKUP:
+                std::cerr << "SSL_connect: need to perform a certificate lookup" << std::endl;
+                break;
+            case SSL_ERROR_SYSCALL:
+                std::cerr << "SSL_connect: some I/O error occurred" << std::endl;
+                break;
+            case SSL_ERROR_SSL:
+                std::cerr << "SSL_connect: a failure in the SSL library occurred" << std::endl;
+                ERR_print_errors_fp(stderr);
+                break;
+            default:
+                std::cerr << "SSL_connect: unknown error" << std::endl;
+                break;
+        }
+    }
+}
+

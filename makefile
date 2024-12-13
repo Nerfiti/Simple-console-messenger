@@ -2,7 +2,7 @@ CC = g++
 
 CFLAGS = -std=c++20 -Wno-format-security
 
-LINKERFLAGS = -lncurses
+LINKERFLAGS = -I/usr/include/openssl -L/usr/lib -lncurses -lssl -lcrypto
 
 SRCS = ./src/messenger.cpp ./src/ip.cpp
 

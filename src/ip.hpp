@@ -4,6 +4,9 @@
 #include <functional>
 #include <net/ethernet.h>
 
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
 class IP_handler
 {
     public:
@@ -36,8 +39,18 @@ class IP_handler
 
         bool active_client_ = false;
 
+        SSL_CTX *ctx_;
+        SSL *ssl_;
+
         void accept_tcp_connection();
         void break_tcp_connection();
         int listen_as_server();
         int listen_as_client();
+
+        void init_openssl();
+        SSL_CTX* create_context();
+        void configure_context(SSL_CTX *ctx, const char *path_to_cert = "cert.pem", const char *path_to_key = "key.pem");
+
+        void accept_tls_connection();
+        void connect_tls();
 };

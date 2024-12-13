@@ -23,7 +23,9 @@ Messenger::Messenger(int socket_type, int port, bool server):
     enter_field_x_(0),
     enter_field_y_(0),
     server_(server)
-    {}
+{
+    setenv("SSLKEYLOGFILE", "/home/daniil/Documents/CN-MIPT/Resources/Keylogs.txt", 1);
+}
 
 void Messenger::proc_message(const char *msg, size_t length, IP_handler*) 
 {
