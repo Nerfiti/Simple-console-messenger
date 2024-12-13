@@ -9,6 +9,9 @@ SRCS = ./src/messenger.cpp ./src/ip.cpp
 SERVER = server.out
 CLIENT = client.out
 
+DEBUG_SERVER = server_gdb.out
+DEBUG_CLIENT = client_gdb.out
+
 all: $(SERVER) $(CLIENT)
 
 $(SERVER): ./src/server.cpp $(SRCS)
@@ -16,6 +19,12 @@ $(SERVER): ./src/server.cpp $(SRCS)
 
 $(CLIENT): ./src/client.cpp $(SRCS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LINKERFLAGS)
+
+$(DEBUG_SERVER): ./src/server.cpp $(SRCS)
+	$(CC) -g $(CFLAGS) -o $@ $^ $(LINKERFLAGS)
+
+$(DEBUG_CLIENT): ./src/client.cpp $(SRCS)
+	$(CC) -g $(CFLAGS) -o $@ $^ $(LINKERFLAGS)
 
 server_udp: $(SERVER)
 	sudo ./$(SERVER) -udp
@@ -29,5 +38,10 @@ client_udp: $(CLIENT)
 client_tcp: $(CLIENT)
 	sudo ./$(CLIENT) -tcp
 
+debug_server: $(DEBUG_SERVER)
+	sudo gdb ./$(DEBUG_SERVER)
+
+debug_client: $(DEBUG_CLIENT)
+	sudo gdb ./$(DEBUG_CLIENT)
 clean:
 	rm ./*out

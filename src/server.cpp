@@ -4,7 +4,7 @@
 
 int main(int argc, const char **argv)
 {
-    int socket_type = SOCK_DGRAM;
+    int socket_type = SOCK_STREAM;
     if (argc > 2)
     {
         std::cerr << "Too much arguments.\n";

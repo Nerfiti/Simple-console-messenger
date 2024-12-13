@@ -50,8 +50,9 @@ int IP_handler::connect()
     }
 
     socket_ = socket(AF_INET, socket_type_, 0);
-    if (socket_type_ == SOCK_DGRAM)
+    if (socket_type_ == SOCK_DGRAM || !server_)
         client_socket_ = socket_;
+
     if (socket_ < 0)
     {
         std::cout << "Error while creating new socket.\n" << strerror(errno) << '\n';
@@ -75,7 +76,10 @@ int IP_handler::connect()
     }
     else
     {
+        // ::connect(socket_, (sockaddr *)&server_address_, server_length_);
+        std::cerr << "CONNECTING TLS\n";
         connect_tls();
+        std::cerr << "TLS CONNECTED\n";
     }
 
     return 0;
@@ -132,13 +136,10 @@ const char *IP_handler::send(const char *message, size_t length)
         {
             if (client_socket_ == -1)
             {
-                if (socket_ == -1)
-                    socket_ = socket(AF_INET, socket_type_, 0);
-                if (::connect(socket_, (sockaddr *)&server_address_, server_length_) == 0)
-                    client_socket_ = socket_;
-                else
-                    return "No connected server.";
+                connect();
+                client_socket_ = socket_;
             }
+
             if (!strcmp(message, "exit()") || !strcasecmp(message, "bye"))
             {
                 break_tcp_connection();
@@ -149,7 +150,10 @@ const char *IP_handler::send(const char *message, size_t length)
             }
         }
 
-        int code = SSL_write(ssl_, message_to_send.c_str(), message_to_send.length());
+        // std::cerr << "BBBBB\n";
+        // int code = SSL_write(ssl_, message_to_send.c_str(), message_to_send.length());
+        std::cerr << "Socket: " << socket_ << ". Client: " << client_socket_ << ". Message: " << message_to_send << ".\n";
+        int code = sendto(socket_, message_to_send.c_str(), message_to_send.length(), 0, NULL, NULL);
         if (code < 0)
             return "Error sending packets.";
 
@@ -187,7 +191,7 @@ int IP_handler::listen_as_server()
         if (socket_type_ == SOCK_STREAM)
         {
             accept_tcp_connection();
-            // accept_tls_connection();
+            accept_tls_connection();
             return 0;
         }
         else
@@ -236,25 +240,37 @@ int IP_handler::listen_as_client()
     if (socket_ == -1)
         return -1;
 
-    int length = SSL_read(ssl_, buf, Buff_size);
+    int length = 0;
+    if (socket_type_ == SOCK_STREAM)
+    {
+        length = recvfrom(socket_, buf, Buff_size, MSG_PEEK, 0, 0);
+        if (length <= 0)
+            return -1;
+
+        length = SSL_read(ssl_, buf, Buff_size);
+    }
+    else
+        length = recvfrom(socket_, buf, Buff_size, 0, NULL, NULL);
+
     if (length <= 0)
-        break_tcp_connection();
+        break_tcp_connection();\
 
     return length;
 }
 
 void IP_handler::init_openssl()
 {
-    SSL_load_error_strings();
+    SSL_library_init();
     OpenSSL_add_ssl_algorithms();
+    SSL_load_error_strings();
 }
 
 SSL_CTX* IP_handler::create_context()
 {
-    const SSL_METHOD *method;
+    const SSL_METHOD *method = TLS_method();
     SSL_CTX *ctx;
 
-    method = server_ ? TLS_server_method() : TLS_client_method();
+    // method = server_ ? TLS_server_method() : TLS_client_method();
 
     ctx = SSL_CTX_new(method);
     if (!ctx) {
@@ -270,14 +286,23 @@ void IP_handler::configure_context(SSL_CTX *ctx, const char *path_to_cert, const
 {
     SSL_CTX_set_ecdh_auto(ctx, 1);
 
-    if (server_) {
-        if (SSL_CTX_use_certificate_file(ctx, path_to_cert, SSL_FILETYPE_PEM) <= 0) {
+    if (server_) 
+    {
+        if (SSL_CTX_use_certificate_file(ctx, path_to_cert, SSL_FILETYPE_PEM) <= 0)
+        {
             ERR_print_errors_fp(stderr);
             exit(EXIT_FAILURE);
         }
 
-        if (SSL_CTX_use_PrivateKey_file(ctx, path_to_key, SSL_FILETYPE_PEM) <= 0) {
+        if (SSL_CTX_use_PrivateKey_file(ctx, path_to_key, SSL_FILETYPE_PEM) <= 0)
+        {
             ERR_print_errors_fp(stderr);
+            exit(EXIT_FAILURE);
+        }
+
+        if (!SSL_CTX_check_private_key(ctx))
+        {
+            std::cerr << "Private key does not match the public certificate" << std::endl;
             exit(EXIT_FAILURE);
         }
     }
@@ -287,47 +312,41 @@ void IP_handler::accept_tls_connection()
 {
     ssl_ = SSL_new(ctx_);
     SSL_set_fd(ssl_, client_socket_);
-    if (SSL_accept(ssl_) <= 0) {
+    if (SSL_accept(ssl_) <= 0)
+    {
         ERR_print_errors_fp(stderr);
     }
 }
 
 void IP_handler::connect_tls()
 {
-    ssl_ = SSL_new(ctx_);
-    if (ssl_ == nullptr) {
-        ERR_print_errors_fp(stderr);
+    std::cerr << "Connecting TLS..." << std::endl;
+
+    if (ctx_ == nullptr)
+    {
+        std::cerr << "SSL_CTX is null" << std::endl;
         return;
     }
 
-    SSL_set_fd(ssl_, socket_);
-    int ret = SSL_connect(ssl_);
-    if (ret <= 0) {
-        int err = SSL_get_error(ssl_, ret);
-        switch (err) {
-            case SSL_ERROR_ZERO_RETURN:
-                std::cerr << "SSL_connect: peer has closed the connection" << std::endl;
-                break;
-            case SSL_ERROR_WANT_READ:
-                std::cerr << "SSL_connect: need more data from the peer" << std::endl;
-                break;
-            case SSL_ERROR_WANT_WRITE:
-                std::cerr << "SSL_connect: need to write more data to the peer" << std::endl;
-                break;
-            case SSL_ERROR_WANT_X509_LOOKUP:
-                std::cerr << "SSL_connect: need to perform a certificate lookup" << std::endl;
-                break;
-            case SSL_ERROR_SYSCALL:
-                std::cerr << "SSL_connect: some I/O error occurred" << std::endl;
-                break;
-            case SSL_ERROR_SSL:
-                std::cerr << "SSL_connect: a failure in the SSL library occurred" << std::endl;
-                ERR_print_errors_fp(stderr);
-                break;
-            default:
-                std::cerr << "SSL_connect: unknown error" << std::endl;
-                break;
-        }
+    ssl_ = SSL_new(ctx_);
+    if (ssl_ == nullptr)
+    {
+        ERR_print_errors_fp(stderr);
+        std::cerr << "SSL_new failed" << std::endl;
+        return;
     }
-}
 
+    std::cerr << "SSL_new succeeded" << std::endl;
+
+    if (socket_ < 0)
+    {
+        std::cerr << "Socket is invalid" << std::endl;
+        return;
+    }
+
+    int code = SSL_set_fd(ssl_, socket_);
+    std::cerr << "SSL_set_fd succeeded: " << code << std::endl;
+    std::cerr << "Socket is " << SSL_get_fd(ssl_) << '\n';
+
+    SSL_connect(ssl_);
+}
